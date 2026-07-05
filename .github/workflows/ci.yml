@@ -1,0 +1,35 @@
+name: CI - Build and Validate Todo App
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: |
+          cd backend
+          docker build -t todo-backend:ci .
+
+      - name: Build frontend image
+        run: |
+          cd frontend
+          docker build -t todo-frontend:ci .
+
+      - name: Validate Kubernetes manifests
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'latest'
+
+      - name: Dry-run validate YAML syntax
+        run: |
+          kubectl apply --dry-run=client -f k8s/mysql.yaml
+          kubectl apply --dry-run=client -f k8s/backend.yaml
+          kubectl apply --dry-run=client -f k8s/frontend.yaml

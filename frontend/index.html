@@ -1,0 +1,479 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Todo APP</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div><h1>My tasks</h1><p>Stay organised, one task at a time.</p></div>
+    <div class="topbar-icon">&#10003;</div>
+  </div>
+
+  <div class="stats">
+    <div class="stat s-total"><div class="stat-num" id="s-total">0</div><div class="stat-label">Total</div></div>
+    <div class="stat s-pend"> <div class="stat-num" id="s-pend">0</div> <div class="stat-label">Pending</div></div>
+    <div class="stat s-done"> <div class="stat-num" id="s-done">0</div> <div class="stat-label">Completed</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">New task</div>
+    <div class="form-fields">
+      <div class="field-err" id="err-title"><span id="err-title-msg"></span></div>
+      <div class="field-wrap">
+        <label class="field-label" for="f-title">Title <span class="required-star">*</span></label>
+        <input type="text" id="f-title" placeholder="What needs to be done?" maxlength="200" autocomplete="off"
+          oninput="onTitleInput()" onkeydown="if(event.key==='Enter')document.getElementById('f-desc').focus()"/>
+        <div class="char-row" id="title-chars">0 / 200</div>
+      </div>
+      <div class="field-err" id="err-desc"><span id="err-desc-msg"></span></div>
+      <div class="field-wrap">
+        <label class="field-label" for="f-desc">Description <span class="required-star">*</span></label>
+        <textarea id="f-desc" placeholder="Describe the task in detail..." maxlength="500" rows="3"
+          oninput="onDescInput()"></textarea>
+        <div class="char-row" id="desc-chars">0 / 500</div>
+      </div>
+      <button class="btn-add" id="btn-add" onclick="addTodo()">+ Add task</button>
+    </div>
+  </div>
+
+  <div class="list-head">
+    <button class="list-head-toggle" onclick="toggleList()" id="list-toggle" aria-expanded="true">
+      <span class="list-head-label">All tasks</span>
+      <span class="chevron open" id="chevron">&#9660;</span>
+    </button>
+    <span class="count-pill" id="count-pill">0</span>
+  </div>
+
+  <div id="list-body">
+    <div class="bulk-bar" id="bulk-bar">
+      <div class="bulk-left">
+        <button class="bulk-check" id="select-all-btn" onclick="toggleSelectAll()">&#10003;</button>
+        <span class="bulk-label" id="bulk-label">Select all</span>
+      </div>
+      <div class="bulk-right">
+        <button class="btn-bulk danger" id="delete-sel-btn" onclick="doDeleteSelected()" style="display:none">
+          &#128465; Delete selected
+        </button>
+        <button class="btn-bulk danger" onclick="doDeleteAll()">
+          &#128465; Delete all
+        </button>
+      </div>
+    </div>
+
+    <div class="filters">
+      <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
+      <button class="filter-btn" onclick="setFilter('pending',this)">Pending</button>
+      <button class="filter-btn" onclick="setFilter('completed',this)">Completed</button>
+    </div>
+
+    <div id="todo-list">
+      <div class="loading"><div class="spinner"></div>Loading tasks&hellip;</div>
+    </div>
+  </div>
+</div>
+
+<!-- modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3 id="modal-title">Confirm deletion</h3>
+    <p  id="modal-msg">This cannot be undone.</p>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-del-confirm" id="modal-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════ */
+var API_BASE = 'http://127.0.0.1:5000';
+var allTodos     = [];
+var activeFilter = 'all';
+var selectedIds  = [];
+var listOpen     = true;
+var openDetailId = null;
+
+/* ═══════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════ */
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-IN',{
+    day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'
+  });
+}
+
+/* Use == not === so "3" == 3 */
+function isSelected(id) {
+  for (var i = 0; i < selectedIds.length; i++) {
+    if (selectedIds[i] == id) return true;
+  }
+  return false;
+}
+
+function addSel(id)    { if (!isSelected(id)) selectedIds.push(Number(id)); }
+function removeSel(id) { selectedIds = selectedIds.filter(function(x){ return x != id; }); }
+
+function findById(id) {
+  for (var i = 0; i < allTodos.length; i++) {
+    if (allTodos[i].id == id) return allTodos[i];
+  }
+  return null;
+}
+
+/* ═══════════════════════════════════════════
+   LOAD
+═══════════════════════════════════════════ */
+function loadTodos() {
+  fetch(API_BASE + '/todos')
+    .then(function(r){ if(!r.ok) throw new Error(); return r.json(); })
+    .then(function(data){
+      allTodos = data;
+      /* prune selections that no longer exist */
+      selectedIds = selectedIds.filter(function(id){ return !!findById(id); });
+      render();
+    })
+    .catch(function(){
+      document.getElementById('todo-list').innerHTML =
+        '<div class="empty"><div class="empty-icon">!</div>' +
+        '<h3>Could not load tasks</h3><p>Make sure the Flask server is running.</p></div>';
+    });
+}
+
+/* ═══════════════════════════════════════════
+   RENDER
+═══════════════════════════════════════════ */
+function render() {
+  var filtered = allTodos.filter(function(t){
+    if (activeFilter === 'pending')   return t.status === 'Pending';
+    if (activeFilter === 'completed') return t.status === 'Completed';
+    return true;
+  });
+
+  var total = allTodos.length;
+  var done  = allTodos.filter(function(t){ return t.status === 'Completed'; }).length;
+  document.getElementById('s-total').textContent    = total;
+  document.getElementById('s-pend').textContent     = total - done;
+  document.getElementById('s-done').textContent     = done;
+  document.getElementById('count-pill').textContent = filtered.length;
+
+  /* bulk bar */
+  if (allTodos.length > 0) document.getElementById('bulk-bar').classList.add('visible');
+  else                      document.getElementById('bulk-bar').classList.remove('visible');
+
+  var filtIds   = filtered.map(function(t){ return t.id; });
+  var selInFilt = filtIds.filter(function(id){ return isSelected(id); });
+  var selBtn    = document.getElementById('select-all-btn');
+  selBtn.className = selInFilt.length === 0             ? 'bulk-check'
+                   : selInFilt.length === filtIds.length ? 'bulk-check all-selected'
+                   :                                       'bulk-check partial';
+
+  var selCount = selectedIds.length;
+  document.getElementById('bulk-label').textContent        = selCount > 0 ? selCount + ' selected' : 'Select all';
+  document.getElementById('delete-sel-btn').style.display  = selCount > 0 ? 'flex' : 'none';
+
+  /* list */
+  var list = document.getElementById('todo-list');
+  if (filtered.length === 0) {
+    var m = { all:['No tasks yet','Add your first task above.'], pending:['All caught up','No pending tasks.'], completed:['Nothing completed yet','Mark a task done to see it here.'] }[activeFilter];
+    list.innerHTML = '<div class="empty"><div class="empty-icon">&#9776;</div><h3>'+m[0]+'</h3><p>'+m[1]+'</p></div>';
+    return;
+  }
+
+  var html = '';
+  var reversed = filtered.slice().reverse();
+  for (var i = 0; i < reversed.length; i++) {
+    var t      = reversed[i];
+    var id     = Number(t.id);          /* always a number */
+    var isDone = t.status === 'Completed';
+    var isSel  = isSelected(id);
+    var isOpen = (openDetailId === id);
+
+    /* ── row ── */
+    html += '<div class="todo' + (isDone?' done':'') + (isSel?' selected':'') + (isOpen?' has-detail-open':'') + '" id="row-'+id+'">';
+    html +=   '<button class="row-check" data-id="'+id+'" onclick="toggleSelect('+id+')">&#10003;</button>';
+    html +=   '<button class="check-btn" data-id="'+id+'" onclick="toggleDone('+id+','+(isDone?1:0)+')" title="'+(isDone?'Mark pending':'Mark completed')+'">&#10003;</button>';
+    html +=   '<div class="todo-main">';
+    html +=     '<div class="todo-title">'+esc(t.title)+'</div>';
+    html +=     '<div class="todo-meta">';
+    html +=       '<span class="badge '+(isDone?'badge-done':'badge-pend')+'">'+t.status+'</span>';
+    html +=       '<span class="todo-date">'+fmtDate(t.created_at)+'</span>';
+    html +=     '</div>';
+    html +=   '</div>';
+    html +=   '<div class="todo-right">';
+    html +=     '<button class="expand-btn" data-id="'+id+'" onclick="toggleDetail('+id+')" title="'+(isOpen?'Hide details':'View details')+'">'+(isOpen?'&#8964;':'&#8250;')+'</button>';
+    html +=     '<button class="del-btn"    data-id="'+id+'" onclick="askDelete('+id+')"    title="Delete">&#128465;</button>';
+    html +=   '</div>';
+    html += '</div>';
+
+    /* ── detail panel ── */
+    html += '<div class="detail-panel'+(isOpen?' open':'') +'" id="detail-'+id+'">';
+    html +=   '<div class="detail-lbl">Description</div>';
+    html +=   '<div class="detail-val'+(t.description?'':' no-desc')+'">'+(t.description?esc(t.description):'No description added.')+'</div>';
+    html +=   '<div class="detail-grid">';
+    html +=     '<div><div class="detail-lbl">Created</div><div class="detail-val">'+fmtDate(t.created_at)+'</div></div>';
+    html +=     '<div><div class="detail-lbl">Last updated</div><div class="detail-val">'+(t.updated_at&&t.updated_at!==t.created_at?fmtDate(t.updated_at):'—')+'</div></div>';
+    html +=   '</div>';
+    html +=   '<div class="detail-actions">';
+    html +=     '<span class="badge '+(isDone?'badge-done':'badge-pend')+'">'+t.status+'</span>';
+    if (isDone) {
+      html += '<button class="detail-btn" onclick="toggleDone('+id+',1)">&#8617; Mark as Pending</button>';
+    } else {
+      html += '<button class="detail-btn" onclick="toggleDone('+id+',0)">&#10003; Mark as Completed</button>';
+    }
+    html +=     '<button class="detail-btn danger" onclick="askDelete('+id+')">&#128465; Delete</button>';
+    html +=   '</div>';
+    html += '</div>';
+  }
+
+  list.innerHTML = html;
+}
+
+/* ═══════════════════════════════════════════
+   DETAIL TOGGLE
+═══════════════════════════════════════════ */
+function toggleDetail(id) {
+  id = Number(id);
+  openDetailId = (openDetailId === id) ? null : id;
+  render();
+}
+
+/* ═══════════════════════════════════════════
+   COLLAPSE LIST
+═══════════════════════════════════════════ */
+function toggleList() {
+  listOpen = !listOpen;
+  document.getElementById('list-body').classList.toggle('collapsed', !listOpen);
+  var chev = document.getElementById('chevron');
+  listOpen ? chev.classList.add('open') : chev.classList.remove('open');
+  document.getElementById('list-toggle').setAttribute('aria-expanded', String(listOpen));
+}
+
+/* ═══════════════════════════════════════════
+   FILTER
+═══════════════════════════════════════════ */
+function setFilter(f, el) {
+  activeFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(function(b){ b.classList.remove('active'); });
+  el.classList.add('active');
+  selectedIds  = [];
+  openDetailId = null;
+  render();
+}
+
+/* ═══════════════════════════════════════════
+   SELECTION
+═══════════════════════════════════════════ */
+function toggleSelect(id) {
+  id = Number(id);
+  if (isSelected(id)) removeSel(id);
+  else                addSel(id);
+  render();
+}
+
+function toggleSelectAll() {
+  var filtered = allTodos.filter(function(t){
+    if (activeFilter === 'pending')   return t.status === 'Pending';
+    if (activeFilter === 'completed') return t.status === 'Completed';
+    return true;
+  });
+  var ids    = filtered.map(function(t){ return Number(t.id); });
+  var allSel = ids.every(function(id){ return isSelected(id); });
+  if (allSel) ids.forEach(function(id){ removeSel(id); });
+  else        ids.forEach(function(id){ addSel(id); });
+  render();
+}
+
+/* ═══════════════════════════════════════════
+   FORM VALIDATION
+═══════════════════════════════════════════ */
+function onTitleInput() {
+  var val = document.getElementById('f-title').value;
+  var el  = document.getElementById('title-chars');
+  el.textContent = val.length + ' / 200';
+  el.className   = 'char-row'+(val.length>180?(val.length>=200?' over':' warn'):'');
+  if (val.trim()) { document.getElementById('err-title').classList.remove('show'); document.getElementById('f-title').classList.remove('invalid'); }
+}
+
+function onDescInput() {
+  var val = document.getElementById('f-desc').value;
+  var el  = document.getElementById('desc-chars');
+  el.textContent = val.length + ' / 500';
+  el.className   = 'char-row'+(val.length>450?(val.length>=500?' over':' warn'):'');
+  if (val.trim()) { document.getElementById('err-desc').classList.remove('show'); document.getElementById('f-desc').classList.remove('invalid'); }
+}
+
+function showErr(errId, inputId, msg) {
+  document.getElementById(errId+'-msg').textContent = msg;
+  document.getElementById(errId).classList.add('show');
+  document.getElementById(inputId).classList.add('invalid');
+  document.getElementById(inputId).focus();
+}
+
+/* ═══════════════════════════════════════════
+   ADD TODO
+═══════════════════════════════════════════ */
+function addTodo() {
+  var title = document.getElementById('f-title').value.trim();
+  var desc  = document.getElementById('f-desc').value.trim();
+
+  document.getElementById('err-title').classList.remove('show');
+  document.getElementById('err-desc').classList.remove('show');
+  document.getElementById('f-title').classList.remove('invalid');
+  document.getElementById('f-desc').classList.remove('invalid');
+
+  if (!title)        { showErr('err-title','f-title','Title is required.'); return; }
+  if (title.length<2){ showErr('err-title','f-title','Title must be at least 2 characters.'); return; }
+  if (!desc)         { showErr('err-desc', 'f-desc', 'Description is required.'); return; }
+  if (desc.length<3) { showErr('err-desc', 'f-desc', 'Description must be at least 3 characters.'); return; }
+
+  var btn = document.getElementById('btn-add');
+  btn.disabled = true; btn.textContent = 'Adding…';
+
+  fetch(API_BASE + '/todos', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ title:title, description:desc })
+  })
+  .then(function(r){ if(!r.ok) throw new Error(); return r.json(); })
+  .then(function(){
+    document.getElementById('f-title').value = '';
+    document.getElementById('f-desc').value  = '';
+    document.getElementById('title-chars').textContent = '0 / 200';
+    document.getElementById('desc-chars').textContent  = '0 / 500';
+    if (!listOpen) toggleList();
+    showToast('Task added');
+    loadTodos();
+  })
+  .catch(function(){ showToast('Failed to add task'); })
+  .finally(function(){ btn.disabled=false; btn.textContent='+ Add task'; });
+}
+
+/* ═══════════════════════════════════════════
+   TOGGLE DONE
+═══════════════════════════════════════════ */
+function toggleDone(id, wasDone) {
+  id = Number(id);
+  fetch(API_BASE + '/todos/'+id, {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ status: wasDone ? 'Pending' : 'Completed' })
+  })
+  .then(function(r){ if(!r.ok) throw new Error(); return r.json(); })
+  .then(function(){ showToast(wasDone?'Marked as pending':'Task completed'); loadTodos(); })
+  .catch(function(){ showToast('Failed to update'); });
+}
+
+/* ═══════════════════════════════════════════
+   DELETE  — all paths go through askDelete()
+═══════════════════════════════════════════ */
+function askDelete(id) {
+  id = Number(id);
+  var todo  = findById(id);
+  var label = todo ? '"' + todo.title + '"' : 'this task';
+  showModal(
+    'Delete task',
+    'Delete ' + label + '? This cannot be undone.',
+    function() { execDelete([id]); }
+  );
+}
+
+function doDeleteSelected() {
+  if (selectedIds.length === 0) return;
+  var ids   = selectedIds.slice();
+  var count = ids.length;
+  showModal(
+    'Delete selected',
+    'Delete ' + count + ' selected task' + (count > 1 ? 's' : '') + '? This cannot be undone.',
+    function() { execDelete(ids); }
+  );
+}
+
+function doDeleteAll() {
+  if (allTodos.length === 0) return;
+  var ids   = allTodos.map(function(t){ return Number(t.id); });
+  var count = ids.length;
+  showModal(
+    'Delete all tasks',
+    'Delete all ' + count + ' tasks? This cannot be undone.',
+    function() { execDelete(ids); }
+  );
+}
+
+function execDelete(ids) {
+  /* ids is already an array of Numbers */
+  var promises = ids.map(function(id){
+    return fetch(API_BASE + '/todos/' + id, { method:'DELETE' });
+  });
+  Promise.all(promises)
+    .then(function(responses){
+      var allOk = responses.every(function(r){ return r.ok; });
+      if (!allOk) throw new Error('one or more deletes failed');
+      selectedIds  = [];
+      openDetailId = null;
+      showToast(ids.length + ' task' + (ids.length>1?'s':'') + ' deleted');
+      loadTodos();
+    })
+    .catch(function(){ showToast('Delete failed — check server'); });
+}
+
+/* ═══════════════════════════════════════════
+   MODAL  — simple, self-contained
+═══════════════════════════════════════════ */
+function showModal(title, msg, onConfirm) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-msg').textContent   = msg;
+
+  var okBtn = document.getElementById('modal-ok');
+  /* Clone to remove any previous listener */
+  var newOk = okBtn.cloneNode(true);
+  okBtn.parentNode.replaceChild(newOk, okBtn);
+  newOk.addEventListener('click', function() {
+    closeModal();
+    onConfirm();
+  });
+
+  document.getElementById('modal').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('show');
+}
+
+document.getElementById('modal').addEventListener('click', function(e){
+  if (e.target === this) closeModal();
+});
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape') closeModal();
+});
+
+/* ═══════════════════════════════════════════
+   TOAST
+═══════════════════════════════════════════ */
+var toastTimer;
+function showToast(msg) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ el.classList.remove('show'); }, 2800);
+}
+
+/* ── init ── */
+loadTodos();
+</script>
+</body>
+</html>
